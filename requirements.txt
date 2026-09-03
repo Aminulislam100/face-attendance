@@ -3,4 +3,4 @@ pandas
 numpy
 requests
 Pillow
-opencv-contrib-python-headless==4.14.0.84
+opencv-contrib-python-headless==4.14.0.94
