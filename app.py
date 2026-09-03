@@ -1,4 +1,3 @@
-import io
 import re
 from datetime import datetime
 
@@ -14,350 +13,736 @@ from github_storage import (
     upload_bytes,
     download_bytes,
 )
-from face_engine import prepare_face, face_to_jpeg, build_lbph_model, predict
 
-
-st.set_page_config(
-    page_title="Automated Face Attendance",
-    page_icon="📷",
-    layout="wide",
+from face_engine import (
+    prepare_face,
+    face_to_jpeg,
+    build_lbph_model,
+    predict,
+    get_match_quality,
 )
 
-PEOPLE_PATH = "database/people.csv"
-ATTENDANCE_PATH = "database/attendance.csv"
+
+# =========================================================
+# PAGE
+# =========================================================
+
+st.set_page_config(
+    page_title="Attendance System",
+    page_icon="📷",
+    layout="wide"
+)
+
+
+# =========================================================
+# CONSTANTS
+# =========================================================
+
+PEOPLE_PATH = (
+    "database/people.csv"
+)
+
+ATTENDANCE_PATH = (
+    "database/attendance.csv"
+)
 
 PEOPLE_COLUMNS = [
-    "number", "name", "position", "folder", "created_at"
+    "number",
+    "name",
+    "position",
+    "folder",
+    "created_at"
 ]
 
 ATTENDANCE_COLUMNS = [
-    "number", "name", "position", "date", "time", "status"
+    "number",
+    "name",
+    "position",
+    "date",
+    "time",
+    "status"
 ]
 
 
+# =========================================================
+# FUNCTIONS
+# =========================================================
+
 def clean_number(value):
+
     value = str(value).strip()
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+
+    if not re.fullmatch(
+        r"[A-Za-z0-9_-]+",
+        value
+    ):
+
         raise ValueError(
-            "Number/ID can contain only letters, numbers, _ and -"
+            "Number / ID can contain only "
+            "letters, numbers, _ and -."
         )
+
     return value
 
 
 def load_people():
-    return load_dataframe(PEOPLE_PATH, PEOPLE_COLUMNS)
+
+    return load_dataframe(
+        PEOPLE_PATH,
+        PEOPLE_COLUMNS
+    )
 
 
 def load_attendance():
-    return load_dataframe(ATTENDANCE_PATH, ATTENDANCE_COLUMNS)
+
+    return load_dataframe(
+        ATTENDANCE_PATH,
+        ATTENDANCE_COLUMNS
+    )
 
 
-def show_github_error(e):
-    st.error("GitHub update failed.")
-    st.exception(e)
+def image_from_camera(
+    camera_image
+):
+
+    image_bytes = (
+        camera_image
+        .getvalue()
+    )
+
+    array = np.frombuffer(
+        image_bytes,
+        dtype=np.uint8
+    )
+
+    bgr = cv2.imdecode(
+        array,
+        cv2.IMREAD_COLOR
+    )
+
+    if bgr is None:
+
+        raise RuntimeError(
+            "Could not read camera image."
+        )
+
+    return cv2.cvtColor(
+        bgr,
+        cv2.COLOR_BGR2RGB
+    )
 
 
-def load_all_face_samples(people_df):
-    """
-    Download all saved face images from GitHub and create LBPH training samples.
-    """
-    samples = []
-    label_map = {}
-    label_id = 0
+def get_face_samples():
 
-    for _, person in people_df.iterrows():
-        number = str(person["number"]).strip()
-        folder = str(person["folder"]).strip()
-
-        label_id += 1
-        label_map[label_id] = person.to_dict()
-
-        entries = list_folder(folder)
-
-        for entry in entries:
-            if entry.get("type") != "file":
-                continue
-
-            path = entry.get("path", "")
-            if not path.lower().endswith((".jpg", ".jpeg", ".png")):
-                continue
-
-            raw = download_bytes(path)
-            if not raw:
-                continue
-
-            array = np.frombuffer(raw, dtype=np.uint8)
-            gray_face = cv2.imdecode(array, cv2.IMREAD_GRAYSCALE)
-
-            if gray_face is None:
-                continue
-
-            gray_face = cv2.equalizeHist(gray_face)
-            gray_face = cv2.resize(gray_face, (200, 200))
-
-            samples.append((label_id, gray_face))
-
-    return samples, label_map
-
-
-@st.cache_resource(show_spinner="Loading face database...")
-def cached_model_and_map(people_signature, people_records):
-    """
-    people_signature is used to invalidate Streamlit's resource cache
-    when the people list changes.
-    """
-    people_df = pd.DataFrame(people_records, columns=PEOPLE_COLUMNS)
-    samples, label_map = load_all_face_samples(people_df)
-    model = build_lbph_model(samples)
-    return model, label_map, len(samples)
-
-
-def model_from_current_database():
     people = load_people()
 
-    if people.empty:
-        return None, {}, 0
+    samples = []
 
-    signature = tuple(
-        (
-            str(row["number"]),
-            str(row["folder"]),
-            str(row["created_at"]),
+    label_map = {}
+
+    current_label = 0
+
+    for _, person in people.iterrows():
+
+        current_label += 1
+
+        number = str(
+            person["number"]
+        ).strip()
+
+        folder = str(
+            person["folder"]
+        ).strip()
+
+        label_map[
+            current_label
+        ] = person.to_dict()
+
+        files = list_folder(
+            folder
         )
-        for _, row in people.iterrows()
+
+        for file_info in files:
+
+            if file_info.get(
+                "type"
+            ) != "file":
+
+                continue
+
+            path = file_info.get(
+                "path",
+                ""
+            )
+
+            if not path.lower().endswith(
+                (
+                    ".jpg",
+                    ".jpeg",
+                    ".png"
+                )
+            ):
+
+                continue
+
+            raw = download_bytes(
+                path
+            )
+
+            if not raw:
+
+                continue
+
+            array = np.frombuffer(
+                raw,
+                dtype=np.uint8
+            )
+
+            face = cv2.imdecode(
+                array,
+                cv2.IMREAD_GRAYSCALE
+            )
+
+            if face is None:
+
+                continue
+
+            face = cv2.resize(
+                face,
+                (200, 200),
+                interpolation=cv2.INTER_AREA
+            )
+
+            face = cv2.equalizeHist(
+                face
+            )
+
+            samples.append(
+                (
+                    current_label,
+                    face
+                )
+            )
+
+    return (
+        samples,
+        label_map
     )
 
-    model, label_map, sample_count = cached_model_and_map(
-        signature,
-        people[PEOPLE_COLUMNS].astype(str).values.tolist(),
+
+def train_model():
+
+    samples, label_map = (
+        get_face_samples()
     )
 
-    return model, label_map, sample_count
+    if not samples:
+
+        return (
+            None,
+            {},
+            0
+        )
+
+    model = build_lbph_model(
+        samples
+    )
+
+    return (
+        model,
+        label_map,
+        len(samples)
+    )
 
 
-def mark_present(person):
+def save_attendance(
+    person
+):
+
     attendance = load_attendance()
-    today = datetime.now().strftime("%Y-%m-%d")
-    now_time = datetime.now().strftime("%H:%M:%S")
+
+    now = datetime.now()
+
+    today = now.strftime(
+        "%Y-%m-%d"
+    )
+
+    current_time = now.strftime(
+        "%H:%M:%S"
+    )
+
+    person_number = str(
+        person["number"]
+    )
 
     existing = attendance[
-        (attendance["number"].astype(str) == str(person["number"])) &
-        (attendance["date"].astype(str) == today)
+        (
+            attendance["number"]
+            .astype(str)
+            == person_number
+        )
+        &
+        (
+            attendance["date"]
+            .astype(str)
+            == today
+        )
     ]
 
     if not existing.empty:
-        return False, existing.iloc[0].to_dict()
 
-    new_row = pd.DataFrame([{
-        "number": str(person["number"]),
-        "name": str(person["name"]),
-        "position": str(person["position"]),
-        "date": today,
-        "time": now_time,
-        "status": "Present",
-    }])
+        return (
+            False,
+            existing.iloc[0].to_dict()
+        )
 
-    updated = pd.concat([attendance, new_row], ignore_index=True)
+    new_record = pd.DataFrame(
+        [{
+            "number":
+                person["number"],
 
-    save_dataframe(
-        ATTENDANCE_PATH,
-        updated[ATTENDANCE_COLUMNS],
-        f"Attendance: {person['name']} ({person['number']}) {today} {now_time}",
+            "name":
+                person["name"],
+
+            "position":
+                person["position"],
+
+            "date":
+                today,
+
+            "time":
+                current_time,
+
+            "status":
+                "Present"
+        }]
     )
 
-    return True, new_row.iloc[0].to_dict()
+    updated = pd.concat(
+        [
+            attendance,
+            new_record
+        ],
+        ignore_index=True
+    )
+
+    save_dataframe(
+
+        ATTENDANCE_PATH,
+
+        updated[
+            ATTENDANCE_COLUMNS
+        ],
+
+        (
+            "Attendance - "
+            f"{person['name']} "
+            f"{today} "
+            f"{current_time}"
+        )
+    )
+
+    return (
+        True,
+        new_record.iloc[0].to_dict()
+    )
 
 
-# -----------------------------
-# Sidebar
-# -----------------------------
+# =========================================================
+# SIDEBAR
+# =========================================================
 
-st.sidebar.title("📷 Attendance System")
+st.sidebar.title(
+    "📷 Attendance System"
+)
 
-page = st.sidebar.radio(
+menu = st.sidebar.radio(
     "Menu",
     [
         "Dashboard",
         "Add New Person",
         "Mark Attendance",
         "Attendance Sheet",
-        "People Database",
-    ],
+        "People Database"
+    ]
 )
 
 threshold = st.sidebar.slider(
-    "Face match threshold",
+
+    "Face distance threshold",
+
     min_value=40.0,
-    max_value=110.0,
+
+    max_value=100.0,
+
     value=75.0,
+
     step=1.0,
-    help="Lower is stricter for LBPH. Start around 70–80 and test with your camera.",
+
+    help=(
+        "Lower values are stricter. "
+        "LBPH distance is not a percentage. "
+        "Start around 70–75 and test."
+    )
 )
 
-# -----------------------------
-# Dashboard
-# -----------------------------
 
-if page == "Dashboard":
-    st.title("📊 Automated Face Attendance")
+# =========================================================
+# DASHBOARD
+# =========================================================
+
+if menu == "Dashboard":
+
+    st.title(
+        "📷 Automated Attendance System"
+    )
 
     try:
+
         people = load_people()
+
         attendance = load_attendance()
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Registered People", len(people))
-
-        today = datetime.now().strftime("%Y-%m-%d")
-        today_records = attendance[
-            attendance["date"].astype(str) == today
-        ]
-
-        c2.metric("Today's Present", len(today_records))
-        c3.metric("Total Records", len(attendance))
-
-        st.info(
-            "GitHub is being used as the permanent storage layer. "
-            "New people, face images and attendance records are committed "
-            "to the repository."
+        today = datetime.now().strftime(
+            "%Y-%m-%d"
         )
 
-        st.subheader("Today's Attendance")
-        if today_records.empty:
-            st.write("No attendance yet today.")
+        today_attendance = attendance[
+            attendance["date"]
+            .astype(str)
+            == today
+        ]
+
+        c1, c2, c3 = st.columns(3)
+
+        c1.metric(
+            "Registered People",
+            len(people)
+        )
+
+        c2.metric(
+            "Today's Present",
+            len(today_attendance)
+        )
+
+        c3.metric(
+            "Total Attendance",
+            len(attendance)
+        )
+
+        st.subheader(
+            "Today's Attendance"
+        )
+
+        if today_attendance.empty:
+
+            st.info(
+                "No attendance today."
+            )
+
         else:
+
             st.dataframe(
-                today_records.sort_values("time"),
+                today_attendance[
+                    [
+                        "number",
+                        "name",
+                        "position",
+                        "date",
+                        "time",
+                        "status"
+                    ]
+                ],
                 use_container_width=True,
-                hide_index=True,
+                hide_index=True
             )
 
     except Exception as e:
-        show_github_error(e)
+
+        st.error(
+            str(e)
+        )
 
 
-# -----------------------------
-# Add New Person
-# -----------------------------
+# =========================================================
+# ADD NEW PERSON
+# =========================================================
 
-elif page == "Add New Person":
-    st.title("👤 Add New Person")
+elif menu == "Add New Person":
 
-    st.caption(
-        "Use one clear face only. Keep the camera in front of the face."
+    st.title(
+        "👤 Add New Person"
     )
 
-    name = st.text_input("Name", placeholder="Aminul Islam")
-    number = st.text_input("Number / ID", placeholder="001")
-    position = st.text_input("Position", placeholder="Teacher")
+    st.info(
+        "Register 3 face samples for better recognition. "
+        "Take photos with slightly different angles or lighting."
+    )
 
-    photo = st.camera_input("Take a face photo")
+    name = st.text_input(
+        "Name",
+        placeholder="EVA"
+    )
 
-    if st.button("✅ Register Person", type="primary"):
+    number = st.text_input(
+        "Number / ID",
+        placeholder="002"
+    )
+
+    position = st.text_input(
+        "Position",
+        placeholder="Manager"
+    )
+
+    st.subheader(
+        "Face Samples"
+    )
+
+    photo1 = st.camera_input(
+        "Face Sample 1",
+        key="face_sample_1"
+    )
+
+    photo2 = st.camera_input(
+        "Face Sample 2",
+        key="face_sample_2"
+    )
+
+    photo3 = st.camera_input(
+        "Face Sample 3",
+        key="face_sample_3"
+    )
+
+    if st.button(
+        "✅ Register Person",
+        type="primary"
+    ):
+
         if not name.strip():
-            st.warning("Enter a name.")
+
+            st.warning(
+                "Please enter the name."
+            )
+
             st.stop()
 
         if not number.strip():
-            st.warning("Enter a number/ID.")
+
+            st.warning(
+                "Please enter Number / ID."
+            )
+
             st.stop()
 
         if not position.strip():
-            st.warning("Enter a position.")
+
+            st.warning(
+                "Please enter position."
+            )
+
             st.stop()
 
-        if photo is None:
-            st.warning("Take a face photo first.")
+        if not photo1:
+
+            st.warning(
+                "Face Sample 1 is required."
+            )
+
             st.stop()
 
         try:
-            number = clean_number(number)
+
+            number = clean_number(
+                number
+            )
 
             people = load_people()
 
-            if not people.empty and (
-                people["number"].astype(str).str.lower() == number.lower()
-            ).any():
-                st.error("This Number / ID is already registered.")
-                st.stop()
+            if not people.empty:
 
-            image_bytes = photo.getvalue()
-            array = np.frombuffer(image_bytes, dtype=np.uint8)
-            bgr = cv2.imdecode(array, cv2.IMREAD_COLOR)
-
-            if bgr is None:
-                st.error("Could not read the camera image.")
-                st.stop()
-
-            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-
-            face, count = prepare_face(rgb)
-
-            if count == 0:
-                st.error("No face found. Take another photo.")
-                st.stop()
-
-            if count > 1:
-                st.error(
-                    "More than one face found. Only one person should be visible."
+                duplicate = (
+                    people["number"]
+                    .astype(str)
+                    .str.lower()
+                    == number.lower()
                 )
+
+                if duplicate.any():
+
+                    st.error(
+                        "This Number / ID is already registered."
+                    )
+
+                    st.stop()
+
+            photos = [
+                photo1,
+                photo2,
+                photo3
+            ]
+
+            valid_faces = []
+
+            for index, photo in enumerate(
+                photos,
+                start=1
+            ):
+
+                if photo is None:
+
+                    continue
+
+                image = image_from_camera(
+                    photo
+                )
+
+                face, count = (
+                    prepare_face(image)
+                )
+
+                if count == 0:
+
+                    st.error(
+                        f"Face Sample {index}: "
+                        "No face found."
+                    )
+
+                    st.stop()
+
+                if count > 1:
+
+                    st.error(
+                        f"Face Sample {index}: "
+                        "More than one face found."
+                    )
+
+                    st.stop()
+
+                valid_faces.append(
+                    face
+                )
+
+            if len(valid_faces) == 0:
+
+                st.error(
+                    "No valid face samples found."
+                )
+
                 st.stop()
 
-            folder = f"database_faces/{number}"
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            face_path = f"{folder}/face_1.jpg"
-
-            # Save face image to GitHub first.
-            upload_bytes(
-                face_path,
-                face_to_jpeg(face),
-                f"Add face data for {name} ({number})",
+            folder = (
+                f"database_faces/{number}"
             )
 
-            new_person = pd.DataFrame([{
-                "number": number,
-                "name": name.strip(),
-                "position": position.strip(),
-                "folder": folder,
-                "created_at": now,
-            }])
-
-            updated_people = pd.concat(
-                [people, new_person],
-                ignore_index=True
+            now = datetime.now().strftime(
+                "%Y-%m-%d %H:%M:%S"
             )
 
-            save_dataframe(
-                PEOPLE_PATH,
-                updated_people[PEOPLE_COLUMNS],
-                f"Register person {name} ({number})",
-            )
+            with st.spinner(
+                "Saving face samples to GitHub..."
+            ):
+
+                for index, face in enumerate(
+                    valid_faces,
+                    start=1
+                ):
+
+                    upload_bytes(
+
+                        f"{folder}/face_{index}.jpg",
+
+                        face_to_jpeg(face),
+
+                        (
+                            f"Add face sample {index} "
+                            f"for {name}"
+                        )
+                    )
+
+                new_person = pd.DataFrame(
+                    [{
+                        "number":
+                            number,
+
+                        "name":
+                            name.strip(),
+
+                        "position":
+                            position.strip(),
+
+                        "folder":
+                            folder,
+
+                        "created_at":
+                            now
+                    }]
+                )
+
+                updated_people = (
+                    pd.concat(
+                        [
+                            people,
+                            new_person
+                        ],
+                        ignore_index=True
+                    )
+                )
+
+                save_dataframe(
+
+                    PEOPLE_PATH,
+
+                    updated_people[
+                        PEOPLE_COLUMNS
+                    ],
+
+                    (
+                        "Register person "
+                        f"{name} ({number})"
+                    )
+                )
 
             st.success(
-                f"✅ {name} was registered successfully."
-            )
-            st.info(
-                "The face image and person information have been saved "
-                "to your GitHub repository."
+                f"✅ {name} registered successfully."
             )
 
-            st.cache_resource.clear()
+            st.write(
+                f"Face samples saved: "
+                f"**{len(valid_faces)}**"
+            )
+
+            st.write(
+                f"GitHub folder: "
+                f"`{folder}`"
+            )
 
         except Exception as e:
-            show_github_error(e)
+
+            st.error(
+                "❌ Registration failed."
+            )
+
+            st.exception(e)
 
 
-# -----------------------------
-# Mark Attendance
-# -----------------------------
+# =========================================================
+# MARK ATTENDANCE
+# =========================================================
 
-elif page == "Mark Attendance":
-    st.title("📷 Mark Attendance")
+elif menu == "Mark Attendance":
+
+    st.title(
+        "📷 Mark Attendance"
+    )
 
     people = load_people()
 
     if people.empty:
-        st.warning("No people are registered yet.")
+
+        st.warning(
+            "No registered people found."
+        )
+
         st.stop()
 
     camera = st.camera_input(
@@ -365,168 +750,352 @@ elif page == "Mark Attendance":
     )
 
     if camera is not None:
-        image_bytes = camera.getvalue()
-        array = np.frombuffer(image_bytes, dtype=np.uint8)
-        bgr = cv2.imdecode(array, cv2.IMREAD_COLOR)
 
-        if bgr is None:
-            st.error("Could not read camera image.")
-            st.stop()
+        try:
 
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-
-        face, count = prepare_face(rgb)
-
-        if count == 0:
-            st.error("❌ No face found.")
-            st.stop()
-
-        if count > 1:
-            st.error(
-                "❌ Multiple faces detected. "
-                "Please keep only one person in the camera."
+            image = image_from_camera(
+                camera
             )
-            st.stop()
 
-        with st.spinner("Matching face with GitHub database..."):
-            try:
-                model, label_map, sample_count = model_from_current_database()
+            face, count = (
+                prepare_face(image)
+            )
 
-                if model is None or not label_map:
-                    st.error("Face database is empty.")
-                    st.stop()
+            if count == 0:
 
-                label, confidence = predict(
-                    model,
-                    face,
-                    threshold=threshold,
+                st.error(
+                    "❌ No face found."
                 )
 
-                if label is None:
-                    st.error(
-                        f"❌ Face not recognized. Match score: {confidence:.1f}"
+                st.stop()
+
+            if count > 1:
+
+                st.error(
+                    "❌ Multiple faces detected. "
+                    "Only one person should be visible."
+                )
+
+                st.stop()
+
+            with st.spinner(
+                "Matching face..."
+            ):
+
+                model, label_map, sample_count = (
+                    train_model()
+                )
+
+            if model is None:
+
+                st.error(
+                    "Face database is empty."
+                )
+
+                st.stop()
+
+            label, distance = predict(
+                model,
+                face,
+                threshold
+            )
+
+            # -----------------------------------------
+            # NOT RECOGNIZED
+            # -----------------------------------------
+
+            if label is None:
+
+                st.error(
+                    "❌ Face not recognized."
+                )
+
+                if distance is not None:
+
+                    st.write(
+                        f"Face distance: "
+                        f"**{distance:.1f}**"
                     )
+
                     st.caption(
-                        "Try better lighting or adjust the threshold in the sidebar."
-                    )
-                    st.stop()
-
-                person = label_map[label]
-
-                st.success("✅ Face recognized!")
-
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Name", person["name"])
-                c2.metric("Number", person["number"])
-                c3.metric("Position", person["position"])
-
-                now = datetime.now()
-
-                st.write(
-                    f"📅 Date: **{now.strftime('%d-%m-%Y')}**"
-                )
-                st.write(
-                    f"⏰ Time: **{now.strftime('%I:%M:%S %p')}**"
-                )
-                st.write(
-                    f"Face match score: **{confidence:.1f}**"
-                )
-
-                created, record = mark_present(person)
-
-                if created:
-                    st.success(
-                        "✅ Attendance saved to GitHub."
-                    )
-                else:
-                    st.info(
-                        f"ℹ️ Already marked Present today at {record['time']}."
+                        "Lower distance generally means "
+                        "a better match."
                     )
 
-            except Exception as e:
-                show_github_error(e)
+                st.stop()
+
+            person = label_map[
+                label
+            ]
+
+            quality = (
+                get_match_quality(
+                    distance
+                )
+            )
+
+            now = datetime.now()
+
+            # -----------------------------------------
+            # RESULT
+            # -----------------------------------------
+
+            st.success(
+                "✅ Face recognized!"
+            )
+
+            c1, c2, c3 = st.columns(3)
+
+            c1.metric(
+                "Name",
+                person["name"]
+            )
+
+            c2.metric(
+                "Number",
+                person["number"]
+            )
+
+            c3.metric(
+                "Position",
+                person["position"]
+            )
+
+            st.write(
+                f"📅 Date: "
+                f"**{now.strftime('%d-%m-%Y')}**"
+            )
+
+            st.write(
+                f"⏰ Time: "
+                f"**{now.strftime('%I:%M:%S %p')}**"
+            )
+
+            st.write(
+                f"🎯 Face distance: "
+                f"**{distance:.1f}**"
+            )
+
+            st.write(
+                f"⭐ Match quality: "
+                f"**{quality}**"
+            )
+
+            st.caption(
+                "Note: Face distance is not a percentage. "
+                "Lower distance generally means a better match."
+            )
+
+            # -----------------------------------------
+            # SAVE ATTENDANCE
+            # -----------------------------------------
+
+            saved, record = (
+                save_attendance(
+                    person
+                )
+            )
+
+            if saved:
+
+                st.success(
+                    "✅ Attendance saved to GitHub."
+                )
+
+            else:
+
+                st.info(
+                    "ℹ️ This person is already marked "
+                    "Present today."
+                )
+
+                st.write(
+                    f"Original time: "
+                    f"**{record['time']}**"
+                )
+
+        except Exception as e:
+
+            st.error(
+                "❌ Face recognition failed."
+            )
+
+            st.exception(e)
 
 
-# -----------------------------
-# Attendance Sheet
-# -----------------------------
+# =========================================================
+# ATTENDANCE SHEET
+# =========================================================
 
-elif page == "Attendance Sheet":
-    st.title("📄 Attendance Sheet")
+elif menu == "Attendance Sheet":
+
+    st.title(
+        "📊 Attendance Sheet"
+    )
 
     try:
+
         attendance = load_attendance()
 
         if attendance.empty:
-            st.info("No attendance records yet.")
+
+            st.info(
+                "No attendance records."
+            )
+
             st.stop()
 
         col1, col2 = st.columns(2)
 
         with col1:
-            selected_date = st.date_input(
-                "Date",
-                value=datetime.now().date()
+
+            selected_date = (
+                st.date_input(
+                    "Select Date",
+                    value=datetime.now().date()
+                )
             )
 
         with col2:
+
             search = st.text_input(
                 "Search Name / Number / Position"
             ).strip().lower()
 
+        date_string = (
+            selected_date.strftime(
+                "%Y-%m-%d"
+            )
+        )
+
         filtered = attendance[
-            attendance["date"].astype(str)
-            == selected_date.strftime("%Y-%m-%d")
+            attendance["date"]
+            .astype(str)
+            == date_string
         ].copy()
 
         if search:
+
             mask = (
-                filtered["name"].str.lower().str.contains(search, na=False) |
-                filtered["number"].str.lower().str.contains(search, na=False) |
-                filtered["position"].str.lower().str.contains(search, na=False)
+
+                filtered["name"]
+                .astype(str)
+                .str.lower()
+                .str.contains(
+                    search,
+                    na=False
+                )
+
+                |
+
+                filtered["number"]
+                .astype(str)
+                .str.lower()
+                .str.contains(
+                    search,
+                    na=False
+                )
+
+                |
+
+                filtered["position"]
+                .astype(str)
+                .str.lower()
+                .str.contains(
+                    search,
+                    na=False
+                )
             )
-            filtered = filtered[mask]
+
+            filtered = filtered[
+                mask
+            ]
 
         st.dataframe(
-            filtered,
+
+            filtered[
+                [
+                    "number",
+                    "name",
+                    "position",
+                    "date",
+                    "time",
+                    "status"
+                ]
+            ],
+
             use_container_width=True,
-            hide_index=True,
+
+            hide_index=True
         )
 
-        csv_data = filtered.to_csv(index=False).encode("utf-8")
+        csv_data = (
+            filtered
+            .to_csv(index=False)
+            .encode("utf-8")
+        )
 
         st.download_button(
+
             "⬇️ Download CSV",
+
             data=csv_data,
-            file_name=f"attendance_{selected_date.strftime('%Y-%m-%d')}.csv",
-            mime="text/csv",
+
+            file_name=(
+                f"attendance_"
+                f"{date_string}.csv"
+            ),
+
+            mime="text/csv"
         )
 
     except Exception as e:
-        show_github_error(e)
+
+        st.error(
+            str(e)
+        )
 
 
-# -----------------------------
-# People Database
-# -----------------------------
+# =========================================================
+# PEOPLE DATABASE
+# =========================================================
 
-elif page == "People Database":
-    st.title("👥 People Database")
+elif menu == "People Database":
+
+    st.title(
+        "👥 People Database"
+    )
 
     try:
+
         people = load_people()
 
         if people.empty:
-            st.info("No people registered.")
+
+            st.info(
+                "No registered people."
+            )
+
             st.stop()
 
         st.dataframe(
+
             people[
-                ["number", "name", "position", "created_at"]
+                [
+                    "number",
+                    "name",
+                    "position",
+                    "created_at"
+                ]
             ],
+
             use_container_width=True,
-            hide_index=True,
+
+            hide_index=True
         )
 
     except Exception as e:
-        show_github_error(e)
+
+        st.error(
+            str(e)
+        )
