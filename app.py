@@ -1,4 +1,3 @@
-```python
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -1125,4 +1124,3 @@ elif menu == "People Database":
         st.error(
             str(e)
         )
-```
