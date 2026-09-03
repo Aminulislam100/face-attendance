@@ -1,145 +1,335 @@
 import base64
 import io
+
+import pandas as pd
 import requests
 import streamlit as st
-import pandas as pd
 
 
-API_URL = "https://api.github.com"
+GITHUB_API = (
+    "https://api.github.com"
+)
 
 
-def _config():
-    repo = st.secrets["GITHUB_REPO"].strip().rstrip("/")
-    token = st.secrets["GITHUB_TOKEN"].strip()
-    branch = st.secrets.get("GITHUB_BRANCH", "main").strip()
+# =========================================================
+# CONFIG
+# =========================================================
 
-    if "/" not in repo:
-        raise ValueError("GITHUB_REPO must look like: username/repository")
+def get_config():
 
-    return repo, token, branch
+    if "GITHUB_REPO" not in st.secrets:
+
+        raise RuntimeError(
+            "GITHUB_REPO is missing from Streamlit Secrets."
+        )
+
+    if "GITHUB_TOKEN" not in st.secrets:
+
+        raise RuntimeError(
+            "GITHUB_TOKEN is missing from Streamlit Secrets."
+        )
+
+    repo = (
+        st.secrets["GITHUB_REPO"]
+        .strip()
+        .rstrip("/")
+    )
+
+    token = (
+        st.secrets["GITHUB_TOKEN"]
+        .strip()
+    )
+
+    branch = (
+        st.secrets
+        .get("GITHUB_BRANCH", "main")
+        .strip()
+    )
+
+    return (
+        repo,
+        token,
+        branch
+    )
 
 
-def _headers():
-    _, token, _ = _config()
+# =========================================================
+# HEADERS
+# =========================================================
+
+def get_headers():
+
+    _, token, _ = get_config()
+
     return {
-        "Accept": "application/vnd.github+json",
-        "Authorization": f"Bearer {token}",
-        "X-GitHub-Api-Version": "2022-11-28",
+
+        "Accept":
+            "application/vnd.github+json",
+
+        "Authorization":
+            f"Bearer {token}",
+
+        "X-GitHub-Api-Version":
+            "2022-11-28"
     }
 
 
-def get_file(path: str):
-    """Return (bytes, sha) for a file. Return (None, None) if it does not exist."""
-    repo, _, branch = _config()
-    url = f"{API_URL}/repos/{repo}/contents/{path}"
+# =========================================================
+# GET FILE
+# =========================================================
+
+def get_file(path):
+
+    repo, _, branch = (
+        get_config()
+    )
+
+    url = (
+        f"{GITHUB_API}/repos/"
+        f"{repo}/contents/{path}"
+    )
 
     response = requests.get(
+
         url,
-        headers=_headers(),
-        params={"ref": branch},
-        timeout=30,
+
+        headers=get_headers(),
+
+        params={
+            "ref": branch
+        },
+
+        timeout=30
     )
 
     if response.status_code == 404:
+
         return None, None
 
     response.raise_for_status()
+
     data = response.json()
 
     if data.get("type") != "file":
-        raise ValueError(f"{path} is not a file.")
 
-    content = base64.b64decode(data["content"])
-    return content, data["sha"]
+        raise RuntimeError(
+            f"GitHub path is not a file: {path}"
+        )
+
+    content = base64.b64decode(
+        data["content"]
+    )
+
+    return (
+        content,
+        data["sha"]
+    )
 
 
-def list_folder(path: str):
-    """Return file entries in a GitHub repository directory."""
-    repo, _, branch = _config()
-    url = f"{API_URL}/repos/{repo}/contents/{path}"
+# =========================================================
+# LIST FOLDER
+# =========================================================
+
+def list_folder(path):
+
+    repo, _, branch = (
+        get_config()
+    )
+
+    url = (
+        f"{GITHUB_API}/repos/"
+        f"{repo}/contents/{path}"
+    )
 
     response = requests.get(
+
         url,
-        headers=_headers(),
-        params={"ref": branch},
-        timeout=30,
+
+        headers=get_headers(),
+
+        params={
+            "ref": branch
+        },
+
+        timeout=30
     )
 
     if response.status_code == 404:
+
         return []
 
     response.raise_for_status()
+
     data = response.json()
 
-    if not isinstance(data, list):
+    if not isinstance(
+        data,
+        list
+    ):
+
         return []
 
     return data
 
 
-def upload_or_update_file(path: str, content: bytes, message: str, sha=None):
-    """Create/update one file in GitHub."""
-    repo, _, branch = _config()
-    url = f"{API_URL}/repos/{repo}/contents/{path}"
+# =========================================================
+# CREATE OR UPDATE FILE
+# =========================================================
+
+def upload_or_update_file(
+    path,
+    content,
+    message,
+    sha=None
+):
+
+    repo, _, branch = (
+        get_config()
+    )
+
+    url = (
+        f"{GITHUB_API}/repos/"
+        f"{repo}/contents/{path}"
+    )
 
     payload = {
-        "message": message,
-        "content": base64.b64encode(content).decode("utf-8"),
-        "branch": branch,
+
+        "message":
+            message,
+
+        "content":
+            base64.b64encode(
+                content
+            ).decode("utf-8"),
+
+        "branch":
+            branch
     }
 
     if sha:
+
         payload["sha"] = sha
 
     response = requests.put(
+
         url,
-        headers=_headers(),
+
+        headers=get_headers(),
+
         json=payload,
-        timeout=30,
+
+        timeout=60
     )
+
     response.raise_for_status()
+
     return response.json()
 
 
-def save_dataframe(path: str, df: pd.DataFrame, message: str):
-    """Save a dataframe as CSV in GitHub."""
-    old_content, sha = get_file(path)
+# =========================================================
+# SAVE DATAFRAME
+# =========================================================
 
-    buffer = io.StringIO()
-    df.to_csv(buffer, index=False)
+def save_dataframe(
+    path,
+    dataframe,
+    message
+):
+
+    _, sha = get_file(
+        path
+    )
+
+    csv_buffer = (
+        dataframe.to_csv(
+            index=False
+        )
+    )
 
     upload_or_update_file(
+
         path=path,
-        content=buffer.getvalue().encode("utf-8"),
+
+        content=csv_buffer.encode(
+            "utf-8"
+        ),
+
         message=message,
-        sha=sha,
+
+        sha=sha
     )
 
 
-def load_dataframe(path: str, columns):
-    """Load CSV from GitHub, returning an empty dataframe when absent."""
-    content, _ = get_file(path)
+# =========================================================
+# LOAD DATAFRAME
+# =========================================================
+
+def load_dataframe(
+    path,
+    columns
+):
+
+    content, _ = (
+        get_file(path)
+    )
 
     if content is None:
-        return pd.DataFrame(columns=columns)
 
-    text = content.decode("utf-8-sig")
-    if not text.strip():
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(
+            columns=columns
+        )
 
-    return pd.read_csv(io.StringIO(text), dtype=str).fillna("")
-
-
-def download_bytes(path: str):
-    content, _ = get_file(path)
-    return content
-
-
-def upload_bytes(path: str, content: bytes, message: str):
-    _, sha = get_file(path)
-    return upload_or_update_file(
-        path=path,
-        content=content,
-        message=message,
-        sha=sha,
+    text = (
+        content
+        .decode("utf-8-sig")
     )
+
+    if not text.strip():
+
+        return pd.DataFrame(
+            columns=columns
+        )
+
+    return pd.read_csv(
+        io.StringIO(text),
+        dtype=str
+    ).fillna("")
+
+
+# =========================================================
+# UPLOAD BYTES
+# =========================================================
+
+def upload_bytes(
+    path,
+    content,
+    message
+):
+
+    _, sha = get_file(
+        path
+    )
+
+    return upload_or_update_file(
+
+        path=path,
+
+        content=content,
+
+        message=message,
+
+        sha=sha
+    )
+
+
+# =========================================================
+# DOWNLOAD BYTES
+# =========================================================
+
+def download_bytes(path):
+
+    content, _ = (
+        get_file(path)
+    )
+
+    return content
