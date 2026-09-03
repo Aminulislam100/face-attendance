@@ -1,5 +1,7 @@
+```python
 import re
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import cv2
 import numpy as np
@@ -62,6 +64,22 @@ ATTENDANCE_COLUMNS = [
     "time",
     "status"
 ]
+
+# Bangladesh timezone
+BANGLADESH_TZ = ZoneInfo(
+    "Asia/Dhaka"
+)
+
+
+# =========================================================
+# BANGLADESH TIME
+# =========================================================
+
+def get_now():
+
+    return datetime.now(
+        BANGLADESH_TZ
+    )
 
 
 # =========================================================
@@ -255,13 +273,16 @@ def train_model():
     )
 
 
-def save_attendance(
-    person
-):
+# =========================================================
+# SAVE ATTENDANCE
+# =========================================================
+
+def save_attendance(person):
 
     attendance = load_attendance()
 
-    now = datetime.now()
+    # Bangladesh local time
+    now = get_now()
 
     today = now.strftime(
         "%Y-%m-%d"
@@ -271,30 +292,15 @@ def save_attendance(
         "%H:%M:%S"
     )
 
-    person_number = str(
-        person["number"]
-    )
-
-    existing = attendance[
-        (
-            attendance["number"]
-            .astype(str)
-            == person_number
-        )
-        &
-        (
-            attendance["date"]
-            .astype(str)
-            == today
-        )
-    ]
-
-    if not existing.empty:
-
-        return (
-            False,
-            existing.iloc[0].to_dict()
-        )
+    # -----------------------------------------------------
+    # IMPORTANT
+    #
+    # We intentionally DO NOT check whether this person
+    # already has attendance today.
+    #
+    # Therefore the same person can scan multiple times
+    # on the same day.
+    # -----------------------------------------------------
 
     new_record = pd.DataFrame(
         [{
@@ -403,7 +409,8 @@ if menu == "Dashboard":
 
         attendance = load_attendance()
 
-        today = datetime.now().strftime(
+        # Bangladesh date
+        today = get_now().strftime(
             "%Y-%m-%d"
         )
 
@@ -412,6 +419,27 @@ if menu == "Dashboard":
             .astype(str)
             == today
         ]
+
+        # -------------------------------------------------
+        # IMPORTANT
+        #
+        # One person can have multiple attendance records
+        # in one day.
+        #
+        # So Today's Present counts UNIQUE people.
+        # -------------------------------------------------
+
+        if today_attendance.empty:
+
+            today_present_people = 0
+
+        else:
+
+            today_present_people = (
+                today_attendance["number"]
+                .astype(str)
+                .nunique()
+            )
 
         c1, c2, c3 = st.columns(3)
 
@@ -422,7 +450,7 @@ if menu == "Dashboard":
 
         c2.metric(
             "Today's Present",
-            len(today_attendance)
+            today_present_people
         )
 
         c3.metric(
@@ -443,6 +471,7 @@ if menu == "Dashboard":
         else:
 
             st.dataframe(
+
                 today_attendance[
                     [
                         "number",
@@ -453,7 +482,9 @@ if menu == "Dashboard":
                         "status"
                     ]
                 ],
+
                 use_container_width=True,
+
                 hide_index=True
             )
 
@@ -634,7 +665,8 @@ elif menu == "Add New Person":
                 f"database_faces/{number}"
             )
 
-            now = datetime.now().strftime(
+            # Bangladesh time
+            now = get_now().strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
 
@@ -834,7 +866,8 @@ elif menu == "Mark Attendance":
                 )
             )
 
-            now = datetime.now()
+            # Bangladesh current time
+            now = get_now()
 
             # -----------------------------------------
             # RESULT
@@ -902,15 +935,8 @@ elif menu == "Mark Attendance":
                     "✅ Attendance saved to GitHub."
                 )
 
-            else:
-
-                st.info(
-                    "ℹ️ This person is already marked "
-                    "Present today."
-                )
-
                 st.write(
-                    f"Original time: "
+                    f"🕐 Attendance time: "
                     f"**{record['time']}**"
                 )
 
@@ -952,7 +978,7 @@ elif menu == "Attendance Sheet":
             selected_date = (
                 st.date_input(
                     "Select Date",
-                    value=datetime.now().date()
+                    value=get_now().date()
                 )
             )
 
@@ -1099,3 +1125,4 @@ elif menu == "People Database":
         st.error(
             str(e)
         )
+```
