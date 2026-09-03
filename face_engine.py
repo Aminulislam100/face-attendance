@@ -4,48 +4,53 @@ from pathlib import Path
 
 
 # =========================================================
-# FACE CASCADE
+# LOAD HAAR CASCADE
 # =========================================================
 
 def get_cascade():
 
-    # Primary OpenCV package location
+    possible_paths = []
+
+    # OpenCV built-in cascade location
     try:
-        cascade_path = (
+        built_in_path = (
             Path(cv2.data.haarcascades)
             / "haarcascade_frontalface_default.xml"
         )
 
-        if cascade_path.exists():
-
-            cascade = cv2.CascadeClassifier(
-                str(cascade_path)
-            )
-
-            if not cascade.empty():
-                return cascade
+        possible_paths.append(
+            built_in_path
+        )
 
     except Exception:
         pass
 
-    # Backup: look in project root
+    # Project root fallback
     local_path = (
         Path(__file__).parent
         / "haarcascade_frontalface_default.xml"
     )
 
-    if local_path.exists():
+    possible_paths.append(
+        local_path
+    )
 
-        cascade = cv2.CascadeClassifier(
-            str(local_path)
-        )
+    for path in possible_paths:
 
-        if not cascade.empty():
-            return cascade
+        if path.exists():
+
+            cascade = cv2.CascadeClassifier(
+                str(path)
+            )
+
+            if not cascade.empty():
+
+                return cascade
 
     raise RuntimeError(
-        "Face detector could not be loaded. "
-        "OpenCV Haar cascade file is missing."
+        "Haar cascade file could not be loaded. "
+        "OpenCV installation does not contain "
+        "the face detector file."
     )
 
 
@@ -53,7 +58,7 @@ CASCADE = get_cascade()
 
 
 # =========================================================
-# IMAGE CONVERSION
+# RGB TO BGR
 # =========================================================
 
 def rgb_to_bgr(image_rgb):
@@ -65,12 +70,14 @@ def rgb_to_bgr(image_rgb):
 
 
 # =========================================================
-# DETECT FACE
+# DETECT FACES
 # =========================================================
 
 def detect_faces(image_rgb):
 
-    bgr = rgb_to_bgr(image_rgb)
+    bgr = rgb_to_bgr(
+        image_rgb
+    )
 
     gray = cv2.cvtColor(
         bgr,
@@ -78,12 +85,17 @@ def detect_faces(image_rgb):
     )
 
     # Improve contrast
-    gray = cv2.equalizeHist(gray)
+    gray = cv2.equalizeHist(
+        gray
+    )
 
     faces = CASCADE.detectMultiScale(
         gray,
+
         scaleFactor=1.1,
+
         minNeighbors=5,
+
         minSize=(80, 80)
     )
 
@@ -103,10 +115,12 @@ def prepare_face(
         image_rgb
     )
 
+    # No face
     if len(faces) == 0:
 
         return None, 0
 
+    # Multiple faces
     if len(faces) > 1:
 
         return None, len(faces)
@@ -118,12 +132,14 @@ def prepare_face(
         x:x + w
     ]
 
+    # Resize
     face = cv2.resize(
         face,
         size,
         interpolation=cv2.INTER_AREA
     )
 
+    # Normalize contrast
     face = cv2.equalizeHist(
         face
     )
@@ -132,7 +148,7 @@ def prepare_face(
 
 
 # =========================================================
-# FACE → JPG
+# FACE IMAGE TO JPG
 # =========================================================
 
 def face_to_jpeg(face):
@@ -156,7 +172,7 @@ def face_to_jpeg(face):
 
 
 # =========================================================
-# LBPH MODEL
+# BUILD LBPH MODEL
 # =========================================================
 
 def build_lbph_model(samples):
@@ -167,7 +183,8 @@ def build_lbph_model(samples):
     ):
 
         raise RuntimeError(
-            "OpenCV contrib face module is unavailable."
+            "OpenCV Face module is unavailable. "
+            "Please install opencv-contrib-python-headless."
         )
 
     if not samples:
@@ -205,7 +222,7 @@ def build_lbph_model(samples):
 
 
 # =========================================================
-# PREDICT
+# PREDICT FACE
 # =========================================================
 
 def predict(
@@ -218,8 +235,8 @@ def predict(
 
         return None, None
 
-    label, distance = model.predict(
-        face
+    label, distance = (
+        model.predict(face)
     )
 
     distance = float(
@@ -243,9 +260,7 @@ def predict(
 # MATCH QUALITY
 # =========================================================
 
-def get_match_quality(
-    distance
-):
+def get_match_quality(distance):
 
     if distance is None:
 
@@ -255,20 +270,22 @@ def get_match_quality(
 
         return "Excellent"
 
-    if distance <= 50:
+    elif distance <= 50:
 
         return "Very Good"
 
-    if distance <= 60:
+    elif distance <= 60:
 
         return "Good"
 
-    if distance <= 70:
+    elif distance <= 70:
 
         return "Fair"
 
-    if distance <= 75:
+    elif distance <= 75:
 
         return "Weak"
 
-    return "Not recognized"
+    else:
+
+        return "Not Recognized"
